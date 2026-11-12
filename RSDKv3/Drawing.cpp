@@ -81,6 +81,8 @@ float viewAnglePos = 0;
 GLuint gfxTextureID[HW_TEXTURE_COUNT];
 GLuint framebufferHW  = 0;
 GLuint renderbufferHW = 0;
+// false when the GL driver has no usable framebuffer objects
+bool framebufferSupported = true;
 GLuint retroBuffer    = 0;
 GLuint retroBuffer2x  = 0;
 GLuint videoBuffer    = 0;
@@ -122,6 +124,7 @@ int InitRenderDevice()
     flags |= SDL_WINDOW_OPENGL;
 
 #if RETRO_PLATFORM != RETRO_OSX // dude idk either you just gotta trust that this works
+#if RETRO_PLATFORM != RETRO_WIN
 #if RETRO_PLATFORM != RETRO_ANDROID
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
 #else
@@ -129,6 +132,7 @@ int InitRenderDevice()
 #endif
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 1);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
 #endif
@@ -267,6 +271,11 @@ int InitRenderDevice()
 #if RETRO_USING_OPENGL
     // Init GL
     Engine.glContext = SDL_GL_CreateContext(Engine.window);
+    if (!Engine.glContext) {
+        PrintLog("ERROR: failed to create OpenGL context!\nerror msg: %s", SDL_GetError());
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "RSDKv3", SDL_GetError(), Engine.window);
+        return false;
+    }
 
     SDL_GL_SetSwapInterval(Engine.vsync ? 1 : 0);
 
@@ -276,9 +285,28 @@ int InitRenderDevice()
     if (err != GLEW_OK && err != GLEW_ERROR_NO_GLX_DISPLAY) {
         PrintLog("glew init error:");
         PrintLog((const char *)glewGetErrorString(err));
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "RSDKv3", (const char *)glewGetErrorString(err), Engine.window);
         return false;
     }
+
+    // Old GL 2.x drivers (e.g. GeForce 6/7) only provide framebuffers through GL_EXT_framebuffer_object,
+    // which leaves the core glBindFramebuffer & co. as NULL pointers (calling them crashes at address 0).
+    if (!glBindFramebuffer && GLEW_EXT_framebuffer_object) {
+        glGenFramebuffers      = (PFNGLGENFRAMEBUFFERSPROC)glGenFramebuffersEXT;
+        glDeleteFramebuffers   = (PFNGLDELETEFRAMEBUFFERSPROC)glDeleteFramebuffersEXT;
+        glBindFramebuffer      = (PFNGLBINDFRAMEBUFFERPROC)glBindFramebufferEXT;
+        glFramebufferTexture2D = (PFNGLFRAMEBUFFERTEXTURE2DPROC)glFramebufferTexture2DEXT;
+    }
+    framebufferSupported = glGenFramebuffers && glDeleteFramebuffers && glBindFramebuffer && glFramebufferTexture2D;
 #endif
+
+    {
+        const char *glVer  = (const char *)glGetString(GL_VERSION);
+        const char *glRend = (const char *)glGetString(GL_RENDERER);
+        PrintLog("OpenGL version: %s", glVer ? glVer : "unknown");
+        PrintLog("OpenGL renderer: %s", glRend ? glRend : "unknown");
+        PrintLog("Framebuffer objects supported: %s", framebufferSupported ? "yes" : "no");
+    }
     Engine.highResMode = false;
     glClearColor(0.0, 0.0, 0.0, 1.0);
     glDisable(GL_LIGHTING);
@@ -309,18 +337,20 @@ int InitRenderDevice()
         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
-    glGenFramebuffers(1, &framebufferHW);
-    glBindFramebuffer(GL_FRAMEBUFFER, framebufferHW);
-    glGenTextures(1, &renderbufferHW);
-    glBindTexture(GL_TEXTURE_2D, renderbufferHW);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 512, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderbufferHW, 0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (framebufferSupported) {    
+        glGenFramebuffers(1, &framebufferHW);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebufferHW);
+        glGenTextures(1, &renderbufferHW);
+        glBindTexture(GL_TEXTURE_2D, renderbufferHW);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 256, 512, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderbufferHW, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
 
     UpdateHardwareTextures();
 
@@ -676,7 +706,8 @@ void FlipScreenFB()
     glOrtho(0, SCREEN_XSIZE << 4, 0.0, SCREEN_YSIZE << 4, -1.0, 1.0);
     glViewport(0, 0, SCREEN_YSIZE, SCREEN_XSIZE);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, framebufferHW);
+    if (framebufferSupported)
+        glBindFramebuffer(GL_FRAMEBUFFER, framebufferHW);
 
     glBindTexture(GL_TEXTURE_2D, gfxTextureID[texPaletteNum]);
     glEnableClientState(GL_COLOR_ARRAY);
@@ -735,7 +766,8 @@ void FlipScreenFB()
     glDrawElements(GL_TRIANGLES, blendedGfxCount, GL_UNSIGNED_SHORT, &gfxPolyListIndex[gfxIndexSizeOpaque]);
     glDisableClientState(GL_COLOR_ARRAY);
 
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (framebufferSupported)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
 #endif
     RenderFromTexture();
 }
@@ -1384,18 +1416,20 @@ void SetScreenDimensions(int width, int height, int winWidth, int winHeight)
     } while (val < SCREEN_YSIZE);
     bufferH--;
 
-    glGenFramebuffers(1, &framebufferHW);
-    glBindFramebuffer(GL_FRAMEBUFFER, framebufferHW);
-    glGenTextures(1, &renderbufferHW);
-    glBindTexture(GL_TEXTURE_2D, renderbufferHW);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1 << bufferH, 1 << bufferW, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderbufferHW, 0);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (framebufferSupported) {
+        glGenFramebuffers(1, &framebufferHW);
+        glBindFramebuffer(GL_FRAMEBUFFER, framebufferHW);
+        glGenTextures(1, &renderbufferHW);
+        glBindTexture(GL_TEXTURE_2D, renderbufferHW);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, Engine.scalingMode ? GL_LINEAR : GL_NEAREST);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1 << bufferH, 1 << bufferW, 0, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, renderbufferHW, 0);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
 
     glGenTextures(1, &retroBuffer);
     glBindTexture(GL_TEXTURE_2D, retroBuffer);
