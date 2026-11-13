@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: x86,           arch: Win32, triplet: x86-windows-static, config: Release,        extra: "-DRETRO_DISABLE_PLUS=off" }
+          - { name: x86,           arch: Win32, triplet: x86-windows-static, config: Release,        extra: "" }
           - { name: x86-nogl,      arch: Win32, triplet: x86-windows-static, config: Release,        extra: "-DRETRO_USE_HW_RENDER=off" }
           - { name: x86-debuginfo, arch: Win32, triplet: x86-windows-static, config: RelWithDebInfo, extra: "-DCMAKE_EXE_LINKER_FLAGS=/MAP" }
           - { name: x64,           arch: x64,   triplet: x64-windows-static, config: Release,        extra: "" }
@@ -23,21 +23,22 @@ jobs:
           submodules: recursive
 
       - name: Install dependencies
-        run: >
-          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install
-          glew sdl2 libogg libtheora libvorbis
-          --triplet=${{ matrix.triplet }}
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install glew sdl2 libogg libtheora libvorbis --triplet=${{ matrix.triplet }}
 
       - name: Configure
-        run: >
-          cmake -B build -A ${{ matrix.arch }}
-          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
-          -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
-          -DCMAKE_PREFIX_PATH="$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/"
-          -DCMAKE_POLICY_DEFAULT_CMP0091=NEW
-          -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
-          
-          ${{ matrix.extra }}
+        run: |
+          $cmakeArgs = @(
+            '-B', 'build',
+            '-A', '${{ matrix.arch }}',
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake",
+            '-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}',
+            "-DCMAKE_PREFIX_PATH=$env:VCPKG_INSTALLATION_ROOT/installed/${{ matrix.triplet }}/",
+            '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW',
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded'
+          )
+          if ('${{ matrix.extra }}' -ne '') { $cmakeArgs += '${{ matrix.extra }}' }
+          cmake @cmakeArgs
 
       - name: Build
         run: cmake --build build --parallel --config ${{ matrix.config }}
