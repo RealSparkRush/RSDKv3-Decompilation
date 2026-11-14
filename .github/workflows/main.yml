@@ -12,6 +12,7 @@ jobs:
       matrix:
         include:
           - { name: x86,           arch: Win32, triplet: x86-windows-static, config: Release,        extra: "" }
+          - { name: x86-noplusdlc, arch: Win32, triplet: x86-windows-static, config: Release,        extra: "-DRETRO_DISABLE_PLUS=on" }
           - { name: x86-nogl,      arch: Win32, triplet: x86-windows-static, config: Release,        extra: "-DRETRO_USE_HW_RENDER=off" }
           - { name: x86-debuginfo, arch: Win32, triplet: x86-windows-static, config: RelWithDebInfo, extra: "-DCMAKE_EXE_LINKER_FLAGS=/MAP" }
           - { name: x64,           arch: x64,   triplet: x64-windows-static, config: Release,        extra: "" }
